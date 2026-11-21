@@ -1,0 +1,6 @@
+{
+  "name": "Kestrel Ledger & Commerce",
+  "description": "AI-assisted fintech coin wallet, sandbox UPI payment gateway, product catalogue, and Super Admin operations platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

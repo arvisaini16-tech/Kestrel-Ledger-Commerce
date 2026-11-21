@@ -1,0 +1,525 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated platform user profile, verification status, and preferences.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "publicUserId": { "type": "string", "maxLength": 24, "pattern": "^UID[0-9]{3,}$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "phoneVerified": { "type": "boolean" },
+        "emailVerified": { "type": "boolean" },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "referralCode": { "type": "string", "maxLength": 24, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredBy": { "type": "string", "maxLength": 24 },
+        "status": { "type": "string", "enum": ["active", "suspended", "flagged"] },
+        "role": { "type": "string", "enum": ["user", "admin", "super_admin"] },
+        "authMethod": { "type": "string", "enum": ["google", "email_otp", "mobile_otp"] },
+        "twoFactorEnabled": { "type": "boolean" },
+        "privacyProfileVisible": { "type": "boolean" },
+        "privacyAnalyticsOptIn": { "type": "boolean" },
+        "lastLoginAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "status", "role", "createdAt", "updatedAt"]
+    },
+    "UserCounter": {
+      "title": "UserCounter",
+      "description": "Monotonic atomic counter generating sequential public User IDs (UID001, UID002, ...).",
+      "type": "object",
+      "properties": {
+        "counterId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "lastSeq": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["counterId", "lastSeq", "updatedAt"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "RBAC administrator role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "support_staff", "read_only_staff"] },
+        "permissions": { "type": "array" },
+        "grantedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "permissions", "grantedBy", "createdAt", "updatedAt"]
+    },
+    "Wallet": {
+      "title": "Wallet",
+      "description": "Server-validated user coin wallet.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "availableCoins": { "type": "number" },
+        "pendingCoins": { "type": "number" },
+        "totalPurchasedCoins": { "type": "number" },
+        "totalCreditedCoins": { "type": "number" },
+        "totalDebitedCoins": { "type": "number" },
+        "simulatedCommissionBalance": { "type": "number" },
+        "lastTxId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "availableCoins", "pendingCoins", "totalPurchasedCoins", "simulatedCommissionBalance", "lastTxId", "updatedAt"]
+    },
+    "WalletLedgerEntry": {
+      "title": "WalletLedgerEntry",
+      "description": "Immutable coin transaction ledger entry.",
+      "type": "object",
+      "properties": {
+        "txId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["credit", "debit", "plan_credit", "commission_sim", "refund", "adjustment"] },
+        "amount": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "referenceId": { "type": "string", "maxLength": 128 },
+        "serverSignature": { "type": "string", "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["completed", "pending", "reversed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["txId", "userId", "type", "amount", "balanceAfter", "referenceId", "serverSignature", "description", "status", "createdAt"]
+    },
+    "WalletTransaction": {
+      "title": "WalletTransaction",
+      "description": "Server-validated manual Admin Coin Management transaction (add or deduct) with idempotency lock.",
+      "type": "object",
+      "properties": {
+        "txId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "idempotencyKey": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminEmail": { "type": "string", "maxLength": 160 },
+        "action": { "type": "string", "enum": ["add", "deduct"] },
+        "amount": { "type": "number" },
+        "balanceBefore": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "reason": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["completed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["txId", "idempotencyKey", "userId", "adminId", "adminEmail", "action", "amount", "balanceBefore", "balanceAfter", "reason", "status", "createdAt"]
+    },
+    "AdminAuditLog": {
+      "title": "AdminAuditLog",
+      "description": "Immutable admin audit log for coin additions, coin deductions, and withdrawal status changes.",
+      "type": "object",
+      "properties": {
+        "auditId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminEmail": { "type": "string", "maxLength": 160 },
+        "actionType": { "type": "string", "enum": ["COIN_ADD", "COIN_DEDUCT", "WITHDRAWAL_STATUS_UPDATE", "WITHDRAWAL_APPROVED", "WITHDRAWAL_REJECTED", "WITHDRAWAL_SUCCESSFUL", "WITHDRAWAL_FAILED", "ADMIN_USER_SEARCH", "USER_STATUS_UPDATED", "USER_IDS_MIGRATED"] },
+        "targetUserId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetEntityId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amount": { "type": "number" },
+        "reason": { "type": "string", "maxLength": 400 },
+        "payoutReferenceNumber": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["auditId", "adminId", "adminEmail", "actionType", "targetUserId", "targetEntityId", "amount", "reason", "payoutReferenceNumber", "details", "createdAt"]
+    },
+    "CoinPackage": {
+      "title": "CoinPackage",
+      "description": "Configurable coin purchase package.",
+      "type": "object",
+      "properties": {
+        "packageId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 120 },
+        "coinQuantity": { "type": "number" },
+        "purchasePrice": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 12 },
+        "description": { "type": "string", "maxLength": 400 },
+        "status": { "type": "string", "enum": ["active", "disabled", "archived"] },
+        "displayOrder": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["packageId", "name", "coinQuantity", "purchasePrice", "currency", "description", "status", "displayOrder", "createdAt", "updatedAt"]
+    },
+    "PlanConfig": {
+      "title": "PlanConfig",
+      "description": "Configurable coin-credit schedule plan.",
+      "type": "object",
+      "properties": {
+        "planId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 140 },
+        "purchasePrice": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 12 },
+        "durationDays": { "type": "number" },
+        "totalScheduledCredits": { "type": "number" },
+        "creditIntervalHours": { "type": "number" },
+        "description": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["active", "disabled", "archived"] },
+        "displayOrder": { "type": "number" },
+        "availableFrom": { "type": "string", "maxLength": 64 },
+        "availableUntil": { "type": "string", "maxLength": 64 },
+        "terms": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["planId", "name", "purchasePrice", "currency", "durationDays", "totalScheduledCredits", "creditIntervalHours", "description", "status", "displayOrder", "availableFrom", "availableUntil", "terms", "createdAt", "updatedAt"]
+    },
+    "PlanPurchase": {
+      "title": "PlanPurchase",
+      "description": "Immutable snapshot of a user's purchased plan and 24-hour credit schedule state.",
+      "type": "object",
+      "properties": {
+        "purchaseId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "planId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "planName": { "type": "string", "maxLength": 140 },
+        "purchasePrice": { "type": "number" },
+        "currency": { "type": "string", "maxLength": 12 },
+        "durationDays": { "type": "number" },
+        "totalScheduledCredits": { "type": "number" },
+        "creditIntervalHours": { "type": "number" },
+        "completedEvents": { "type": "number" },
+        "totalEvents": { "type": "number" },
+        "creditedCoinsSoFar": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "completed", "cancelled"] },
+        "activatedAtIso": { "type": "string", "maxLength": 64 },
+        "completesAtIso": { "type": "string", "maxLength": 64 },
+        "nextCreditAtIso": { "type": "string", "maxLength": 64 },
+        "termsSnapshot": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["purchaseId", "userId", "planId", "planName", "purchasePrice", "currency", "durationDays", "totalScheduledCredits", "creditIntervalHours", "completedEvents", "totalEvents", "creditedCoinsSoFar", "status", "activatedAtIso", "completesAtIso", "nextCreditAtIso", "termsSnapshot", "createdAt", "updatedAt"]
+    },
+    "PlanCreditScheduleEvent": {
+      "title": "PlanCreditScheduleEvent",
+      "description": "Individual 24-hour scheduled coin credit event with idempotency lock.",
+      "type": "object",
+      "properties": {
+        "scheduleId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "purchaseId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "dayIndex": { "type": "number" },
+        "amountCoins": { "type": "number" },
+        "scheduledAtIso": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["pending", "credited", "failed"] },
+        "idempotencyKey": { "type": "string", "maxLength": 128 },
+        "ledgerTxId": { "type": "string", "maxLength": 128 },
+        "creditedAtIso": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["scheduleId", "purchaseId", "userId", "dayIndex", "amountCoins", "scheduledAtIso", "status", "idempotencyKey", "ledgerTxId", "creditedAtIso"]
+    },
+    "PaymentConfiguration": {
+      "title": "PaymentConfiguration",
+      "description": "Authorized merchant UPI configuration for backend random assignment.",
+      "type": "object",
+      "properties": {
+        "configId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "label": { "type": "string", "maxLength": 120 },
+        "upiId": { "type": "string", "maxLength": 120 },
+        "merchantName": { "type": "string", "maxLength": 120 },
+        "provider": { "type": "string", "maxLength": 80 },
+        "enabled": { "type": "boolean" },
+        "mode": { "type": "string", "enum": ["SANDBOX_ONLY"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["configId", "label", "upiId", "merchantName", "provider", "enabled", "mode", "createdAt", "updatedAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Storefront hardware or membership item.",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 1200 },
+        "category": { "type": "string", "enum": ["Hardware", "Terminals", "Membership Kits", "Service Plans"] },
+        "itemType": { "type": "string", "enum": ["product", "plan"] },
+        "coinPrice": { "type": "number" },
+        "inrPrice": { "type": "number" },
+        "imageUrl": { "type": "string", "maxLength": 500 },
+        "active": { "type": "boolean" },
+        "stock": { "type": "number" },
+        "billingCycle": { "type": "string", "enum": ["one_time", "monthly", "annual"] },
+        "eligibility": { "type": "string", "maxLength": 300 },
+        "terms": { "type": "string", "maxLength": 600 },
+        "features": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "title", "description", "category", "itemType", "coinPrice", "inrPrice", "imageUrl", "active", "stock", "billingCycle", "eligibility", "terms", "features", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Product or plan purchase record.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "productTitle": { "type": "string", "maxLength": 160 },
+        "itemType": { "type": "string", "enum": ["product", "plan"] },
+        "quantity": { "type": "number" },
+        "coinAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "fulfilled", "refunded"] },
+        "referenceId": { "type": "string", "maxLength": 128 },
+        "serverSignature": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderId", "userId", "productId", "productTitle", "itemType", "quantity", "coinAmount", "status", "referenceId", "serverSignature", "createdAt", "updatedAt"]
+    },
+    "SandboxPayment": {
+      "title": "SandboxPayment",
+      "description": "Sandbox-only UPI payment intent with fixed assigned UPI configuration.",
+      "type": "object",
+      "properties": {
+        "paymentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 160 },
+        "idempotencyKey": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amountInr": { "type": "number" },
+        "coinsRequested": { "type": "number" },
+        "upiApp": { "type": "string", "enum": ["GPay Sandbox", "PhonePe Sandbox", "Paytm Sandbox", "BHIM Sandbox", "QR Sandbox"] },
+        "assignedConfigId": { "type": "string", "maxLength": 128 },
+        "sandboxUpiId": { "type": "string", "maxLength": 100 },
+        "gatewayProvider": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["initiated", "webhook_verified", "credited", "failed", "expired", "refunded"] },
+        "webhookEventId": { "type": "string", "maxLength": 128 },
+        "serverSignature": { "type": "string", "maxLength": 128 },
+        "failureReason": { "type": "string", "maxLength": 300 },
+        "isSimulated": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["paymentId", "userId", "userEmail", "idempotencyKey", "amountInr", "coinsRequested", "upiApp", "sandboxUpiId", "gatewayProvider", "status", "webhookEventId", "serverSignature", "failureReason", "isSimulated", "createdAt", "updatedAt"]
+    },
+    "CoinRequest": {
+      "title": "CoinRequest",
+      "description": "Coin addition request awaiting admin validation.",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "paymentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "amountInr": { "type": "number" },
+        "coinsRequested": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "adminNote": { "type": "string", "maxLength": 400 },
+        "reviewedBy": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["requestId", "userId", "paymentId", "amountInr", "coinsRequested", "status", "adminNote", "reviewedBy", "createdAt", "updatedAt"]
+    },
+    "WithdrawalRequest": {
+      "title": "WithdrawalRequest",
+      "description": "Simulated withdrawal request reviewed by administrators.",
+      "type": "object",
+      "properties": {
+        "withdrawalId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userName": { "type": "string", "maxLength": 120 },
+        "userEmail": { "type": "string", "maxLength": 160 },
+        "amountCoins": { "type": "number" },
+        "equivalentInr": { "type": "number" },
+        "payoutChannel": { "type": "string", "enum": ["Simulated Bank Transfer", "Simulated UPI Sandbox"] },
+        "accountLabel": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["pending", "under_review", "approved", "processing", "successful", "rejected", "failed"] },
+        "payoutReferenceNumber": { "type": "string", "maxLength": 128 },
+        "providerConfirmed": { "type": "boolean" },
+        "debitedFromWallet": { "type": "boolean" },
+        "adminNote": { "type": "string", "maxLength": 400 },
+        "reviewedBy": { "type": "string", "maxLength": 160 },
+        "isSimulated": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["withdrawalId", "userId", "userEmail", "amountCoins", "equivalentInr", "payoutChannel", "accountLabel", "status", "adminNote", "reviewedBy", "isSimulated", "createdAt", "updatedAt"]
+    },
+    "ReferralRecord": {
+      "title": "ReferralRecord",
+      "description": "Simulated referral attribution record.",
+      "type": "object",
+      "properties": {
+        "referralId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referrerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredUserId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredName": { "type": "string", "maxLength": 120 },
+        "referralCode": { "type": "string", "maxLength": 24 },
+        "simulatedCommissionCoins": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "credited"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referralId", "referrerId", "referredUserId", "referredName", "referralCode", "simulatedCommissionCoins", "status", "createdAt"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer support ticket.",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userEmail": { "type": "string", "maxLength": 160 },
+        "category": { "type": "string", "enum": ["Login problem", "Payment problem", "Coin problem", "Product problem", "Plan problem", "Withdrawal problem", "Account problem", "Other"] },
+        "subject": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 2000 },
+        "attachmentName": { "type": "string", "maxLength": 160 },
+        "attachmentDataUrl": { "type": "string", "maxLength": 200000 },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved", "closed"] },
+        "priority": { "type": "string", "enum": ["normal", "high"] },
+        "assignedTo": { "type": "string", "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ticketId", "userId", "userEmail", "category", "subject", "description", "attachmentName", "attachmentDataUrl", "status", "priority", "createdAt", "updatedAt"]
+    },
+    "TicketMessage": {
+      "title": "TicketMessage",
+      "description": "Reply message inside a support ticket thread.",
+      "type": "object",
+      "properties": {
+        "messageId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ticketId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderRole": { "type": "string", "enum": ["user", "admin"] },
+        "senderName": { "type": "string", "maxLength": 120 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["messageId", "ticketId", "senderId", "senderRole", "senderName", "body", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notification record.",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 140 },
+        "body": { "type": "string", "maxLength": 500 },
+        "category": { "type": "string", "enum": ["wallet", "plan", "payment", "support", "security", "system"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["notificationId", "userId", "title", "body", "category", "read", "createdAt"]
+    },
+    "AdminSettings": {
+      "title": "AdminSettings",
+      "description": "Platform branding, ticker toggle, support contacts, and theme preferences.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 64 },
+        "brandName": { "type": "string", "maxLength": 80 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "logoUrl": { "type": "string", "maxLength": 50000 },
+        "faviconUrl": { "type": "string", "maxLength": 50000 },
+        "accentColor": { "type": "string", "maxLength": 24 },
+        "defaultTheme": { "type": "string", "enum": ["light", "dark"] },
+        "tickerEnabled": { "type": "boolean" },
+        "referralsEnabled": { "type": "boolean" },
+        "withdrawalsEnabled": { "type": "boolean" },
+        "whatsappNumber": { "type": "string", "maxLength": 32 },
+        "telegramUrl": { "type": "string", "maxLength": 200 },
+        "supportEmail": { "type": "string", "maxLength": 160 },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["settingId", "brandName", "tagline", "logoUrl", "faviconUrl", "accentColor", "defaultTheme", "tickerEnabled", "referralsEnabled", "withdrawalsEnabled", "whatsappNumber", "telegramUrl", "supportEmail", "updatedBy", "updatedAt"]
+    },
+    "AiFeatureSettings": {
+      "title": "AiFeatureSettings",
+      "description": "Master and per-module AI feature switches and usage quota limits.",
+      "type": "object",
+      "properties": {
+        "settingId": { "type": "string", "maxLength": 64 },
+        "masterEnabled": { "type": "boolean" },
+        "dailyLimitPerUser": { "type": "number" },
+        "aiSmartAssistant": { "type": "boolean" },
+        "aiAdminDashboard": { "type": "boolean" },
+        "aiFraudDetection": { "type": "boolean" },
+        "aiSmartSuggestions": { "type": "boolean" },
+        "aiHelpdesk": { "type": "boolean" },
+        "aiVoiceAssistant": { "type": "boolean" },
+        "multilingualAi": { "type": "boolean" },
+        "aiBusinessIntelligence": { "type": "boolean" },
+        "aiThemeDesigner": { "type": "boolean" },
+        "smartNotificationEngine": { "type": "boolean" },
+        "aiDatabaseHealthMonitor": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["settingId", "masterEnabled", "dailyLimitPerUser", "aiSmartAssistant", "aiAdminDashboard", "aiFraudDetection", "aiSmartSuggestions", "aiHelpdesk", "aiVoiceAssistant", "multilingualAi", "aiBusinessIntelligence", "aiThemeDesigner", "smartNotificationEngine", "aiDatabaseHealthMonitor", "updatedBy", "updatedAt"]
+    },
+    "GatewayConfig": {
+      "title": "GatewayConfig",
+      "description": "Sandbox payment gateway configuration.",
+      "type": "object",
+      "properties": {
+        "configId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "gatewayMode": { "type": "string", "enum": ["SANDBOX_ONLY"] },
+        "providerName": { "type": "string", "maxLength": 100 },
+        "sandboxVpa": { "type": "string", "maxLength": 100 },
+        "merchantName": { "type": "string", "maxLength": 100 },
+        "coinRateInr": { "type": "number" },
+        "minWithdrawalCoins": { "type": "number" },
+        "maxDailyWithdrawalCoins": { "type": "number" },
+        "realMoneyDisabledNotice": { "type": "string", "maxLength": 400 },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["configId", "gatewayMode", "providerName", "sandboxVpa", "merchantName", "coinRateInr", "minWithdrawalCoins", "maxDailyWithdrawalCoins", "realMoneyDisabledNotice", "updatedBy", "updatedAt"]
+    },
+    "SecurityLog": {
+      "title": "SecurityLog",
+      "description": "Immutable audit and security event log.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorEmail": { "type": "string", "maxLength": 160 },
+        "action": { "type": "string", "maxLength": 120 },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"] },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 500 },
+        "ipHint": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["logId", "actorUid", "actorEmail", "action", "severity", "targetId", "details", "ipHint", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": { "schema": { "$ref": "#/entities/UserProfile" }, "description": "Private user profiles." },
+    "/userCounters/{counterId}": { "schema": { "$ref": "#/entities/UserCounter" }, "description": "Sequential public User ID atomic counters." },
+    "/admins/{userId}": { "schema": { "$ref": "#/entities/AdminRole" }, "description": "Admin RBAC roles." },
+    "/wallets/{userId}": { "schema": { "$ref": "#/entities/Wallet" }, "description": "User coin wallets." },
+    "/wallet_ledger/{txId}": { "schema": { "$ref": "#/entities/WalletLedgerEntry" }, "description": "Immutable coin ledger." },
+    "/walletTransactions/{txId}": { "schema": { "$ref": "#/entities/WalletTransaction" }, "description": "Manual Admin coin management ledger transactions." },
+    "/withdrawalRequests/{withdrawalId}": { "schema": { "$ref": "#/entities/WithdrawalRequest" }, "description": "Withdrawal requests with 7-stage payout status lifecycle." },
+    "/adminAuditLogs/{auditId}": { "schema": { "$ref": "#/entities/AdminAuditLog" }, "description": "Immutable admin coin, search, user status, and withdrawal audit trail." },
+    "/coinPackages/{packageId}": { "schema": { "$ref": "#/entities/CoinPackage" }, "description": "Configurable coin purchase packages." },
+    "/plans/{planId}": { "schema": { "$ref": "#/entities/PlanConfig" }, "description": "Configurable scheduled credit plans." },
+    "/planPurchases/{purchaseId}": { "schema": { "$ref": "#/entities/PlanPurchase" }, "description": "Active and completed user plan snapshots." },
+    "/planCreditSchedules/{scheduleId}": { "schema": { "$ref": "#/entities/PlanCreditScheduleEvent" }, "description": "24-hour scheduled coin credit events." },
+    "/paymentConfigurations/{configId}": { "schema": { "$ref": "#/entities/PaymentConfiguration" }, "description": "Authorized merchant UPI configs." },
+    "/products/{productId}": { "schema": { "$ref": "#/entities/Product" }, "description": "Storefront hardware and kits." },
+    "/orders/{orderId}": { "schema": { "$ref": "#/entities/Order" }, "description": "Product orders." },
+    "/payments/{paymentId}": { "schema": { "$ref": "#/entities/SandboxPayment" }, "description": "Sandbox UPI payment requests." },
+    "/paymentRequests/{paymentId}": { "schema": { "$ref": "#/entities/SandboxPayment" }, "description": "Payment request mirror for reporting queries." },
+    "/coin_requests/{requestId}": { "schema": { "$ref": "#/entities/CoinRequest" }, "description": "Coin addition approval queue." },
+    "/withdrawals/{withdrawalId}": { "schema": { "$ref": "#/entities/WithdrawalRequest" }, "description": "Simulated withdrawal requests." },
+    "/referrals/{referralId}": { "schema": { "$ref": "#/entities/ReferralRecord" }, "description": "Simulated referral logs." },
+    "/support_tickets/{ticketId}": { "schema": { "$ref": "#/entities/SupportTicket" }, "description": "Support tickets." },
+    "/support_tickets/{ticketId}/messages/{messageId}": { "schema": { "$ref": "#/entities/TicketMessage" }, "description": "Support thread messages." },
+    "/notifications/{notificationId}": { "schema": { "$ref": "#/entities/Notification" }, "description": "User notifications." },
+    "/adminSettings/{settingId}": { "schema": { "$ref": "#/entities/AdminSettings" }, "description": "Branding, theme, and platform toggles." },
+    "/aiFeatureSettings/{settingId}": { "schema": { "$ref": "#/entities/AiFeatureSettings" }, "description": "AI feature switches and limits." },
+    "/gateway_config/{configId}": { "schema": { "$ref": "#/entities/GatewayConfig" }, "description": "Sandbox gateway configuration." },
+    "/security_logs/{logId}": { "schema": { "$ref": "#/entities/SecurityLog" }, "description": "Audit and security logs." }
+  }
+}

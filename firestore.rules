@@ -1,0 +1,940 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'arvisaini16@gmail.com';
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        isBootstrappedSuperAdmin() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isSuperAdmin() {
+      return isVerifiedUser() && (
+        isBootstrappedSuperAdmin() ||
+        (exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'super_admin')
+      );
+    }
+
+    // --- Entity Validation Blueprints ---
+    function isValidPublicUserId(val) {
+      return val is string && val.size() >= 6 && val.size() <= 24 && val.matches('^UID[0-9]{3,}$');
+    }
+
+    function isValidUserProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'phone', 'phoneVerified', 'emailVerified', 'photoURL', 'referralCode', 'referredBy', 'status', 'role', 'twoFactorEnabled', 'privacyProfileVisible', 'privacyAnalyticsOptIn', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'publicUserId', 'displayName', 'email', 'phone', 'phoneVerified', 'emailVerified', 'photoURL', 'referralCode', 'referredBy', 'status', 'role', 'authMethod', 'twoFactorEnabled', 'privacyProfileVisible', 'privacyAnalyticsOptIn', 'lastLoginAt', 'createdAt', 'updatedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && (!('publicUserId' in data) || isValidPublicUserId(data.publicUserId))
+        && (!('authMethod' in data) || data.authMethod in ['google', 'email_otp', 'mobile_otp'])
+        && (!('lastLoginAt' in data) || data.lastLoginAt is timestamp)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.phone is string && data.phone.size() <= 32
+        && data.phoneVerified is bool
+        && data.emailVerified is bool
+        && data.photoURL is string && data.photoURL.size() <= 500
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 24 && data.referralCode.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.referredBy is string && data.referredBy.size() <= 24
+        && data.status in ['active', 'suspended', 'flagged']
+        && data.role in ['user', 'admin', 'super_admin']
+        && data.twoFactorEnabled is bool
+        && data.privacyProfileVisible is bool
+        && data.privacyAnalyticsOptIn is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRole(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'permissions', 'grantedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'role', 'permissions', 'grantedBy', 'createdAt', 'updatedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.role in ['super_admin', 'admin', 'support_staff', 'read_only_staff']
+        && data.permissions is list && data.permissions.size() >= 1 && data.permissions.size() <= 12 && data.permissions[0] is string
+        && data.grantedBy is string && data.grantedBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWallet(data, userId) {
+      return data.keys().hasAll(['userId', 'availableCoins', 'pendingCoins', 'totalPurchasedCoins', 'simulatedCommissionBalance', 'lastTxId', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'availableCoins', 'pendingCoins', 'totalPurchasedCoins', 'totalCreditedCoins', 'totalDebitedCoins', 'simulatedCommissionBalance', 'lastTxId', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && data.availableCoins is number && data.availableCoins >= 0 && data.availableCoins <= 100000000
+        && data.pendingCoins is number && data.pendingCoins >= 0 && data.pendingCoins <= 100000000
+        && data.totalPurchasedCoins is number && data.totalPurchasedCoins >= 0 && data.totalPurchasedCoins <= 100000000
+        && data.simulatedCommissionBalance is number && data.simulatedCommissionBalance >= 0 && data.simulatedCommissionBalance <= 100000000
+        && isValidId(data.lastTxId)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWalletLedgerEntry(data, txId) {
+      return data.keys().hasAll(['txId', 'userId', 'type', 'amount', 'balanceAfter', 'referenceId', 'serverSignature', 'description', 'status', 'createdAt'])
+        && data.keys().hasOnly(['txId', 'userId', 'type', 'amount', 'balanceAfter', 'referenceId', 'serverSignature', 'description', 'status', 'createdAt'])
+        && data.txId == txId
+        && isValidId(data.txId)
+        && isValidId(data.userId)
+        && data.type in ['credit', 'debit', 'plan_credit', 'commission_sim', 'refund', 'adjustment']
+        && data.amount is number && data.amount >= 0 && data.amount <= 100000000
+        && data.balanceAfter is number && data.balanceAfter >= 0 && data.balanceAfter <= 100000000
+        && data.referenceId is string && data.referenceId.size() <= 128
+        && data.serverSignature is string && data.serverSignature.size() >= 16 && data.serverSignature.size() <= 128
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 300
+        && data.status in ['completed', 'pending', 'reversed']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidWalletTransaction(data, txId) {
+      return data.keys().hasAll(['txId', 'idempotencyKey', 'userId', 'adminId', 'adminEmail', 'action', 'amount', 'balanceBefore', 'balanceAfter', 'reason', 'status', 'createdAt'])
+        && data.keys().hasOnly(['txId', 'idempotencyKey', 'userId', 'adminId', 'adminEmail', 'action', 'amount', 'balanceBefore', 'balanceAfter', 'reason', 'status', 'createdAt'])
+        && data.txId == txId
+        && isValidId(data.txId)
+        && isValidId(data.idempotencyKey)
+        && isValidId(data.userId)
+        && isValidId(data.adminId)
+        && data.adminEmail is string && data.adminEmail.size() <= 160
+        && data.action in ['add', 'deduct']
+        && data.amount is number && data.amount > 0 && data.amount <= 100000000
+        && data.balanceBefore is number && data.balanceBefore >= 0 && data.balanceBefore <= 100000000
+        && data.balanceAfter is number && data.balanceAfter >= 0 && data.balanceAfter <= 100000000
+        && data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 300
+        && data.status == 'completed'
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdminAuditLog(data, auditId) {
+      return data.keys().hasAll(['auditId', 'adminId', 'adminEmail', 'actionType', 'targetUserId', 'targetEntityId', 'amount', 'reason', 'payoutReferenceNumber', 'details', 'createdAt'])
+        && data.keys().hasOnly(['auditId', 'adminId', 'adminEmail', 'actionType', 'targetUserId', 'targetEntityId', 'amount', 'reason', 'payoutReferenceNumber', 'details', 'createdAt'])
+        && data.auditId == auditId
+        && isValidId(data.auditId)
+        && isValidId(data.adminId)
+        && data.adminEmail is string && data.adminEmail.size() <= 160
+        && data.actionType in ['COIN_ADD', 'COIN_DEDUCT', 'WITHDRAWAL_STATUS_UPDATE', 'WITHDRAWAL_APPROVED', 'WITHDRAWAL_REJECTED', 'WITHDRAWAL_SUCCESSFUL', 'WITHDRAWAL_FAILED', 'ADMIN_USER_SEARCH', 'USER_STATUS_UPDATED', 'USER_IDS_MIGRATED']
+        && isValidId(data.targetUserId)
+        && isValidId(data.targetEntityId)
+        && data.amount is number && data.amount >= 0 && data.amount <= 100000000
+        && data.reason is string && data.reason.size() <= 400
+        && data.payoutReferenceNumber is string && data.payoutReferenceNumber.size() <= 128
+        && data.details is string && data.details.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCoinPackage(data, packageId) {
+      return data.keys().hasAll(['packageId', 'name', 'coinQuantity', 'purchasePrice', 'currency', 'description', 'status', 'displayOrder', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['packageId', 'name', 'coinQuantity', 'purchasePrice', 'currency', 'description', 'status', 'displayOrder', 'createdAt', 'updatedAt'])
+        && data.packageId == packageId && isValidId(data.packageId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.coinQuantity is number && data.coinQuantity >= 1 && data.coinQuantity <= 10000000
+        && data.purchasePrice is number && data.purchasePrice >= 1 && data.purchasePrice <= 10000000
+        && data.currency is string && data.currency.size() >= 2 && data.currency.size() <= 12
+        && data.description is string && data.description.size() <= 400
+        && data.status in ['active', 'disabled', 'archived']
+        && data.displayOrder is int && data.displayOrder >= 0 && data.displayOrder <= 1000
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function isValidPlanConfig(data, planId) {
+      return data.keys().hasAll(['planId', 'name', 'purchasePrice', 'currency', 'durationDays', 'totalScheduledCredits', 'creditIntervalHours', 'description', 'status', 'displayOrder', 'availableFrom', 'availableUntil', 'terms', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['planId', 'name', 'purchasePrice', 'currency', 'durationDays', 'totalScheduledCredits', 'creditIntervalHours', 'description', 'status', 'displayOrder', 'availableFrom', 'availableUntil', 'terms', 'createdAt', 'updatedAt'])
+        && data.planId == planId && isValidId(data.planId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 140
+        && data.purchasePrice is number && data.purchasePrice >= 1 && data.purchasePrice <= 10000000
+        && data.currency is string && data.currency.size() <= 12
+        && data.durationDays is int && data.durationDays >= 1 && data.durationDays <= 3650
+        && data.totalScheduledCredits is number && data.totalScheduledCredits >= 1 && data.totalScheduledCredits <= 10000000
+        && data.creditIntervalHours == 24
+        && data.description is string && data.description.size() <= 1000
+        && data.status in ['active', 'disabled', 'archived']
+        && data.displayOrder is int && data.displayOrder >= 0 && data.displayOrder <= 1000
+        && data.availableFrom is string && data.availableFrom.size() <= 64
+        && data.availableUntil is string && data.availableUntil.size() <= 64
+        && data.terms is string && data.terms.size() <= 1000
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function isValidPlanPurchase(data, purchaseId) {
+      return data.keys().hasAll(['purchaseId', 'userId', 'planId', 'planName', 'purchasePrice', 'currency', 'durationDays', 'totalScheduledCredits', 'creditIntervalHours', 'completedEvents', 'totalEvents', 'creditedCoinsSoFar', 'status', 'activatedAtIso', 'completesAtIso', 'nextCreditAtIso', 'termsSnapshot', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['purchaseId', 'userId', 'planId', 'planName', 'purchasePrice', 'currency', 'durationDays', 'totalScheduledCredits', 'creditIntervalHours', 'completedEvents', 'totalEvents', 'creditedCoinsSoFar', 'status', 'activatedAtIso', 'completesAtIso', 'nextCreditAtIso', 'termsSnapshot', 'createdAt', 'updatedAt'])
+        && data.purchaseId == purchaseId && isValidId(data.purchaseId)
+        && isValidId(data.userId) && isValidId(data.planId)
+        && data.planName is string && data.planName.size() <= 140
+        && data.purchasePrice is number && data.purchasePrice >= 1
+        && data.currency is string && data.currency.size() <= 12
+        && data.durationDays is int && data.durationDays >= 1 && data.durationDays <= 3650
+        && data.totalScheduledCredits is number && data.totalScheduledCredits >= 1
+        && data.creditIntervalHours == 24
+        && data.completedEvents is int && data.completedEvents >= 0
+        && data.totalEvents is int && data.totalEvents >= 1
+        && data.creditedCoinsSoFar is number && data.creditedCoinsSoFar >= 0
+        && data.status in ['active', 'completed', 'cancelled']
+        && data.activatedAtIso is string && data.activatedAtIso.size() <= 64
+        && data.completesAtIso is string && data.completesAtIso.size() <= 64
+        && data.nextCreditAtIso is string && data.nextCreditAtIso.size() <= 64
+        && data.termsSnapshot is string && data.termsSnapshot.size() <= 1000
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentConfiguration(data, configId) {
+      return data.keys().hasAll(['configId', 'label', 'upiId', 'merchantName', 'provider', 'enabled', 'mode', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['configId', 'label', 'upiId', 'merchantName', 'provider', 'enabled', 'mode', 'createdAt', 'updatedAt'])
+        && data.configId == configId && isValidId(data.configId)
+        && data.label is string && data.label.size() >= 2 && data.label.size() <= 120
+        && data.upiId is string && data.upiId.size() >= 3 && data.upiId.size() <= 120
+        && data.merchantName is string && data.merchantName.size() >= 2 && data.merchantName.size() <= 120
+        && data.provider is string && data.provider.size() <= 80
+        && data.enabled is bool
+        && data.mode == 'SANDBOX_ONLY'
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function isValidProduct(data, productId) {
+      return data.keys().hasAll(['productId', 'title', 'description', 'category', 'itemType', 'coinPrice', 'inrPrice', 'imageUrl', 'active', 'stock', 'billingCycle', 'eligibility', 'terms', 'features', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['productId', 'title', 'description', 'category', 'itemType', 'coinPrice', 'inrPrice', 'imageUrl', 'active', 'stock', 'billingCycle', 'eligibility', 'terms', 'features', 'createdAt', 'updatedAt'])
+        && data.productId == productId
+        && isValidId(data.productId)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 1200
+        && data.category in ['Hardware', 'Terminals', 'Membership Kits', 'Service Plans']
+        && data.itemType in ['product', 'plan']
+        && data.coinPrice is number && data.coinPrice > 0 && data.coinPrice <= 10000000
+        && data.inrPrice is number && data.inrPrice > 0 && data.inrPrice <= 10000000
+        && data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 500
+        && data.active is bool
+        && data.stock is int && data.stock >= 0 && data.stock <= 1000000
+        && data.billingCycle in ['one_time', 'monthly', 'annual']
+        && data.eligibility is string && data.eligibility.size() <= 300
+        && data.terms is string && data.terms.size() <= 600
+        && data.features is list && data.features.size() >= 1 && data.features.size() <= 8 && data.features[0] is string
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data, orderId) {
+      return data.keys().hasAll(['orderId', 'userId', 'productId', 'productTitle', 'itemType', 'quantity', 'coinAmount', 'status', 'referenceId', 'serverSignature', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'userId', 'productId', 'productTitle', 'itemType', 'quantity', 'coinAmount', 'status', 'referenceId', 'serverSignature', 'createdAt', 'updatedAt'])
+        && data.orderId == orderId
+        && isValidId(data.orderId)
+        && isValidId(data.userId)
+        && isValidId(data.productId)
+        && data.productTitle is string && data.productTitle.size() >= 1 && data.productTitle.size() <= 160
+        && data.itemType in ['product', 'plan']
+        && data.quantity is int && data.quantity >= 1 && data.quantity <= 100
+        && data.coinAmount is number && data.coinAmount > 0 && data.coinAmount <= 10000000
+        && data.status in ['completed', 'fulfilled', 'refunded']
+        && data.referenceId is string && data.referenceId.size() <= 128
+        && data.serverSignature is string && data.serverSignature.size() >= 16 && data.serverSignature.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSandboxPayment(data, paymentId) {
+      return data.keys().hasAll(['paymentId', 'userId', 'userEmail', 'idempotencyKey', 'amountInr', 'coinsRequested', 'upiApp', 'sandboxUpiId', 'gatewayProvider', 'status', 'webhookEventId', 'serverSignature', 'failureReason', 'isSimulated', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['paymentId', 'userId', 'userEmail', 'idempotencyKey', 'amountInr', 'coinsRequested', 'upiApp', 'assignedConfigId', 'sandboxUpiId', 'gatewayProvider', 'status', 'webhookEventId', 'serverSignature', 'failureReason', 'isSimulated', 'createdAt', 'updatedAt'])
+        && data.paymentId == paymentId
+        && isValidId(data.paymentId)
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() <= 160
+        && isValidId(data.idempotencyKey)
+        && data.amountInr is number && data.amountInr >= 1 && data.amountInr <= 1000000
+        && data.coinsRequested is number && data.coinsRequested >= 1 && data.coinsRequested <= 10000000
+        && data.upiApp in ['GPay Sandbox', 'PhonePe Sandbox', 'Paytm Sandbox', 'BHIM Sandbox', 'QR Sandbox']
+        && data.sandboxUpiId is string && data.sandboxUpiId.size() <= 100
+        && data.gatewayProvider is string && data.gatewayProvider.size() <= 64
+        && data.status in ['initiated', 'webhook_verified', 'credited', 'failed', 'expired', 'refunded']
+        && data.webhookEventId is string && data.webhookEventId.size() <= 128
+        && data.serverSignature is string && data.serverSignature.size() <= 128
+        && data.failureReason is string && data.failureReason.size() <= 300
+        && data.isSimulated == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCoinRequest(data, requestId) {
+      return data.keys().hasAll(['requestId', 'userId', 'paymentId', 'amountInr', 'coinsRequested', 'status', 'adminNote', 'reviewedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['requestId', 'userId', 'paymentId', 'amountInr', 'coinsRequested', 'status', 'adminNote', 'reviewedBy', 'createdAt', 'updatedAt'])
+        && data.requestId == requestId
+        && isValidId(data.requestId)
+        && isValidId(data.userId)
+        && isValidId(data.paymentId)
+        && data.amountInr is number && data.amountInr >= 1 && data.amountInr <= 1000000
+        && data.coinsRequested is number && data.coinsRequested >= 1 && data.coinsRequested <= 10000000
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.adminNote is string && data.adminNote.size() <= 400
+        && data.reviewedBy is string && data.reviewedBy.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWithdrawal(data, withdrawalId) {
+      return data.keys().hasAll(['withdrawalId', 'userId', 'userEmail', 'amountCoins', 'equivalentInr', 'payoutChannel', 'accountLabel', 'status', 'adminNote', 'reviewedBy', 'isSimulated', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['withdrawalId', 'userId', 'userName', 'userEmail', 'amountCoins', 'equivalentInr', 'payoutChannel', 'accountLabel', 'status', 'payoutReferenceNumber', 'providerConfirmed', 'debitedFromWallet', 'adminNote', 'reviewedBy', 'isSimulated', 'createdAt', 'updatedAt'])
+        && data.withdrawalId == withdrawalId
+        && isValidId(data.withdrawalId)
+        && isValidId(data.userId)
+        && (!('userName' in data) || (data.userName is string && data.userName.size() <= 120))
+        && data.userEmail is string && data.userEmail.size() <= 160
+        && data.amountCoins is number && data.amountCoins >= 10 && data.amountCoins <= 10000000
+        && data.equivalentInr is number && data.equivalentInr >= 1 && data.equivalentInr <= 10000000
+        && data.payoutChannel in ['Simulated Bank Transfer', 'Simulated UPI Sandbox']
+        && data.accountLabel is string && data.accountLabel.size() >= 2 && data.accountLabel.size() <= 120
+        && data.status in ['pending', 'under_review', 'approved', 'processing', 'successful', 'rejected', 'failed']
+        && (!('payoutReferenceNumber' in data) || (data.payoutReferenceNumber is string && data.payoutReferenceNumber.size() <= 128))
+        && (!('providerConfirmed' in data) || data.providerConfirmed is bool)
+        && (!('debitedFromWallet' in data) || data.debitedFromWallet is bool)
+        && data.adminNote is string && data.adminNote.size() <= 400
+        && data.reviewedBy is string && data.reviewedBy.size() <= 160
+        && data.isSimulated == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferral(data, referralId) {
+      return data.keys().hasAll(['referralId', 'referrerId', 'referredUserId', 'referredName', 'referralCode', 'simulatedCommissionCoins', 'status', 'createdAt'])
+        && data.keys().hasOnly(['referralId', 'referrerId', 'referredUserId', 'referredName', 'referralCode', 'simulatedCommissionCoins', 'status', 'createdAt'])
+        && data.referralId == referralId
+        && isValidId(data.referralId)
+        && isValidId(data.referrerId)
+        && isValidId(data.referredUserId)
+        && data.referredName is string && data.referredName.size() >= 1 && data.referredName.size() <= 120
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 24
+        && data.simulatedCommissionCoins is number && data.simulatedCommissionCoins >= 0 && data.simulatedCommissionCoins <= 100000
+        && data.status in ['pending', 'credited']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSupportTicket(data, ticketId) {
+      return data.keys().hasAll(['ticketId', 'userId', 'userEmail', 'category', 'subject', 'description', 'attachmentName', 'attachmentDataUrl', 'status', 'priority', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ticketId', 'userId', 'userEmail', 'category', 'subject', 'description', 'attachmentName', 'attachmentDataUrl', 'status', 'priority', 'assignedTo', 'createdAt', 'updatedAt'])
+        && data.ticketId == ticketId
+        && isValidId(data.ticketId)
+        && isValidId(data.userId)
+        && data.userEmail is string && data.userEmail.size() <= 160
+        && data.category in ['Login problem', 'Payment problem', 'Coin problem', 'Product problem', 'Plan problem', 'Withdrawal problem', 'Account problem', 'Other']
+        && data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 160
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 2000
+        && data.attachmentName is string && data.attachmentName.size() <= 160
+        && data.attachmentDataUrl is string && data.attachmentDataUrl.size() <= 200000
+        && data.status in ['open', 'in_progress', 'resolved', 'closed']
+        && data.priority in ['normal', 'high']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTicketMessage(data, ticketId, messageId) {
+      return data.keys().hasAll(['messageId', 'ticketId', 'senderId', 'senderRole', 'senderName', 'body', 'createdAt'])
+        && data.keys().hasOnly(['messageId', 'ticketId', 'senderId', 'senderRole', 'senderName', 'body', 'createdAt'])
+        && data.messageId == messageId
+        && data.ticketId == ticketId
+        && isValidId(data.messageId)
+        && isValidId(data.senderId)
+        && data.senderRole in ['user', 'admin']
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 120
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 2000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data, notificationId) {
+      return data.keys().hasAll(['notificationId', 'userId', 'title', 'body', 'category', 'read', 'createdAt'])
+        && data.keys().hasOnly(['notificationId', 'userId', 'title', 'body', 'category', 'read', 'createdAt'])
+        && data.notificationId == notificationId
+        && isValidId(data.notificationId)
+        && isValidId(data.userId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 500
+        && data.category in ['wallet', 'plan', 'payment', 'support', 'security', 'system']
+        && data.read is bool
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdminSettings(data, settingId) {
+      return data.keys().hasAll(['settingId', 'brandName', 'tagline', 'logoUrl', 'faviconUrl', 'accentColor', 'defaultTheme', 'tickerEnabled', 'referralsEnabled', 'withdrawalsEnabled', 'whatsappNumber', 'telegramUrl', 'supportEmail', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['settingId', 'brandName', 'tagline', 'logoUrl', 'faviconUrl', 'accentColor', 'defaultTheme', 'tickerEnabled', 'referralsEnabled', 'withdrawalsEnabled', 'whatsappNumber', 'telegramUrl', 'supportEmail', 'updatedBy', 'updatedAt'])
+        && data.settingId == settingId && isValidId(data.settingId)
+        && data.brandName is string && data.brandName.size() >= 1 && data.brandName.size() <= 80
+        && data.tagline is string && data.tagline.size() <= 200
+        && data.logoUrl is string && data.logoUrl.size() <= 50000
+        && data.faviconUrl is string && data.faviconUrl.size() <= 50000
+        && data.accentColor is string && data.accentColor.size() <= 24
+        && data.defaultTheme in ['light', 'dark']
+        && data.tickerEnabled is bool
+        && data.referralsEnabled is bool
+        && data.withdrawalsEnabled is bool
+        && data.whatsappNumber is string && data.whatsappNumber.size() <= 32
+        && data.telegramUrl is string && data.telegramUrl.size() <= 200
+        && data.supportEmail is string && data.supportEmail.size() <= 160
+        && data.updatedBy is string && data.updatedBy.size() <= 160
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAiFeatureSettings(data, settingId) {
+      return data.keys().hasAll(['settingId', 'masterEnabled', 'dailyLimitPerUser', 'aiSmartAssistant', 'aiAdminDashboard', 'aiFraudDetection', 'aiSmartSuggestions', 'aiHelpdesk', 'aiVoiceAssistant', 'multilingualAi', 'aiBusinessIntelligence', 'aiThemeDesigner', 'smartNotificationEngine', 'aiDatabaseHealthMonitor', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['settingId', 'masterEnabled', 'dailyLimitPerUser', 'aiSmartAssistant', 'aiAdminDashboard', 'aiFraudDetection', 'aiSmartSuggestions', 'aiHelpdesk', 'aiVoiceAssistant', 'multilingualAi', 'aiBusinessIntelligence', 'aiThemeDesigner', 'smartNotificationEngine', 'aiDatabaseHealthMonitor', 'updatedBy', 'updatedAt'])
+        && data.settingId == settingId && isValidId(data.settingId)
+        && data.masterEnabled is bool
+        && data.dailyLimitPerUser is int && data.dailyLimitPerUser >= 1 && data.dailyLimitPerUser <= 10000
+        && data.aiSmartAssistant is bool && data.aiAdminDashboard is bool && data.aiFraudDetection is bool
+        && data.aiSmartSuggestions is bool && data.aiHelpdesk is bool && data.aiVoiceAssistant is bool
+        && data.multilingualAi is bool && data.aiBusinessIntelligence is bool && data.aiThemeDesigner is bool
+        && data.smartNotificationEngine is bool && data.aiDatabaseHealthMonitor is bool
+        && data.updatedBy is string && data.updatedBy.size() <= 160
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGatewayConfig(data, configId) {
+      return data.keys().hasAll(['configId', 'gatewayMode', 'providerName', 'sandboxVpa', 'merchantName', 'coinRateInr', 'minWithdrawalCoins', 'maxDailyWithdrawalCoins', 'realMoneyDisabledNotice', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['configId', 'gatewayMode', 'providerName', 'sandboxVpa', 'merchantName', 'coinRateInr', 'minWithdrawalCoins', 'maxDailyWithdrawalCoins', 'realMoneyDisabledNotice', 'updatedBy', 'updatedAt'])
+        && data.configId == configId
+        && isValidId(data.configId)
+        && data.gatewayMode == 'SANDBOX_ONLY'
+        && data.providerName is string && data.providerName.size() >= 2 && data.providerName.size() <= 100
+        && data.sandboxVpa is string && data.sandboxVpa.size() >= 3 && data.sandboxVpa.size() <= 100
+        && data.merchantName is string && data.merchantName.size() >= 2 && data.merchantName.size() <= 100
+        && data.coinRateInr is number && data.coinRateInr > 0 && data.coinRateInr <= 1000
+        && data.minWithdrawalCoins is number && data.minWithdrawalCoins >= 1 && data.minWithdrawalCoins <= 100000
+        && data.maxDailyWithdrawalCoins is number && data.maxDailyWithdrawalCoins >= 10 && data.maxDailyWithdrawalCoins <= 10000000
+        && data.realMoneyDisabledNotice is string && data.realMoneyDisabledNotice.size() <= 400
+        && data.updatedBy is string && data.updatedBy.size() <= 160
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSecurityLog(data, logId) {
+      return data.keys().hasAll(['logId', 'actorUid', 'actorEmail', 'action', 'severity', 'targetId', 'details', 'ipHint', 'createdAt'])
+        && data.keys().hasOnly(['logId', 'actorUid', 'actorEmail', 'action', 'severity', 'targetId', 'details', 'ipHint', 'createdAt'])
+        && data.logId == logId
+        && isValidId(data.logId)
+        && isValidId(data.actorUid)
+        && data.actorEmail is string && data.actorEmail.size() <= 160
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 120
+        && data.severity in ['info', 'warning', 'critical']
+        && data.targetId is string && data.targetId.size() <= 128
+        && data.details is string && data.details.size() <= 500
+        && data.ipHint is string && data.ipHint.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isVerifiedUser() && isOwner(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().role == 'user'
+        && incoming().status == 'active'
+        && (!('publicUserId' in incoming()) || existsAfter(/databases/$(database)/documents/userCounters/users))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedUser() && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (!('publicUserId' in existing()) || existing().publicUserId == '' || incoming().publicUserId == existing().publicUserId)
+        && (
+          isAdmin() ||
+          (isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().status == existing().status
+            && (!('publicUserId' in incoming()) || ('publicUserId' in existing() && incoming().publicUserId == existing().publicUserId))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'phoneVerified', 'photoURL', 'twoFactorEnabled', 'privacyProfileVisible', 'privacyAnalyticsOptIn', 'lastLoginAt', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    match /userCounters/{counterId} {
+      allow get: if isValidId(counterId) && isSignedIn();
+      allow list: if isAdmin();
+      allow create: if isValidId(counterId) && isVerifiedUser()
+        && incoming().keys().hasAll(['counterId', 'lastSeq', 'updatedAt'])
+        && incoming().keys().hasOnly(['counterId', 'lastSeq', 'updatedAt'])
+        && incoming().counterId == counterId
+        && incoming().lastSeq == 1
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(counterId) && isVerifiedUser()
+        && incoming().keys().hasAll(['counterId', 'lastSeq', 'updatedAt'])
+        && incoming().keys().hasOnly(['counterId', 'lastSeq', 'updatedAt'])
+        && incoming().counterId == existing().counterId
+        && incoming().lastSeq is int
+        && incoming().lastSeq == existing().lastSeq + 1
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isSuperAdmin()
+        && isValidAdminRole(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isSuperAdmin()
+        && isValidAdminRole(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(userId) && isSuperAdmin() && userId != request.auth.uid;
+    }
+
+    match /wallets/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isVerifiedUser() && isOwner(userId)
+        && isValidWallet(incoming(), userId)
+        && incoming().availableCoins == 0
+        && incoming().pendingCoins == 0
+        && incoming().totalPurchasedCoins == 0
+        && incoming().simulatedCommissionBalance == 0
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedUser()
+        && isValidWallet(incoming(), userId)
+        && incoming().userId == existing().userId
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['availableCoins', 'totalDebitedCoins', 'lastTxId', 'updatedAt'])
+            && incoming().availableCoins < existing().availableCoins
+            && incoming().pendingCoins == existing().pendingCoins
+            && incoming().totalPurchasedCoins == existing().totalPurchasedCoins
+            && incoming().simulatedCommissionBalance == existing().simulatedCommissionBalance
+            && (
+              (existsAfter(/databases/$(database)/documents/orders/$(incoming().lastTxId))
+               && getAfter(/databases/$(database)/documents/orders/$(incoming().lastTxId)).data.userId == request.auth.uid
+               && getAfter(/databases/$(database)/documents/orders/$(incoming().lastTxId)).data.coinAmount == (existing().availableCoins - incoming().availableCoins))
+              ||
+              (existsAfter(/databases/$(database)/documents/planPurchases/$(incoming().lastTxId))
+               && getAfter(/databases/$(database)/documents/planPurchases/$(incoming().lastTxId)).data.userId == request.auth.uid
+               && getAfter(/databases/$(database)/documents/planPurchases/$(incoming().lastTxId)).data.purchasePrice == (existing().availableCoins - incoming().availableCoins))
+            ))
+        );
+      allow delete: if false;
+    }
+
+    match /wallet_ledger/{txId} {
+      allow get: if isValidId(txId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(txId) && isVerifiedUser()
+        && isValidWalletLedgerEntry(incoming(), txId)
+        && incoming().createdAt == request.time
+        && (
+          isAdmin() ||
+          (incoming().userId == request.auth.uid
+            && incoming().type == 'debit'
+            && incoming().status == 'completed'
+            && (
+              (existsAfter(/databases/$(database)/documents/orders/$(incoming().referenceId))
+               && getAfter(/databases/$(database)/documents/orders/$(incoming().referenceId)).data.userId == request.auth.uid)
+              ||
+              (existsAfter(/databases/$(database)/documents/planPurchases/$(incoming().referenceId))
+               && getAfter(/databases/$(database)/documents/planPurchases/$(incoming().referenceId)).data.userId == request.auth.uid)
+            ))
+        );
+      allow update, delete: if false;
+    }
+
+    match /walletTransactions/{txId} {
+      allow get: if isValidId(txId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(txId) && isAdmin()
+        && isValidWalletTransaction(incoming(), txId)
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /adminAuditLogs/{auditId} {
+      allow get: if isValidId(auditId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(auditId) && isAdmin()
+        && isValidAdminAuditLog(incoming(), auditId)
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /coinPackages/{packageId} {
+      allow get: if isValidId(packageId) && (existing().status == 'active' || isAdmin());
+      allow list: if resource.data.status == 'active' || isAdmin();
+      allow create: if isValidId(packageId) && isAdmin()
+        && isValidCoinPackage(incoming(), packageId)
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(packageId) && isAdmin()
+        && isValidCoinPackage(incoming(), packageId)
+        && incoming().packageId == existing().packageId
+        && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(packageId) && isAdmin();
+    }
+
+    match /plans/{planId} {
+      allow get: if isValidId(planId) && (existing().status == 'active' || isAdmin());
+      allow list: if resource.data.status == 'active' || isAdmin();
+      allow create: if isValidId(planId) && isAdmin()
+        && isValidPlanConfig(incoming(), planId)
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(planId) && isAdmin()
+        && isValidPlanConfig(incoming(), planId)
+        && incoming().planId == existing().planId
+        && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(planId) && isAdmin();
+    }
+
+    match /planPurchases/{purchaseId} {
+      allow get: if isValidId(purchaseId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(purchaseId) && isVerifiedUser()
+        && isValidPlanPurchase(incoming(), purchaseId)
+        && incoming().userId == request.auth.uid
+        && incoming().completedEvents == 0
+        && incoming().creditedCoinsSoFar == 0
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/plans/$(incoming().planId))
+        && get(/databases/$(database)/documents/plans/$(incoming().planId)).data.status == 'active'
+        && incoming().purchasePrice == get(/databases/$(database)/documents/plans/$(incoming().planId)).data.purchasePrice
+        && incoming().durationDays == get(/databases/$(database)/documents/plans/$(incoming().planId)).data.durationDays
+        && incoming().totalScheduledCredits == get(/databases/$(database)/documents/plans/$(incoming().planId)).data.totalScheduledCredits;
+      allow update: if isValidId(purchaseId) && isAdmin()
+        && isValidPlanPurchase(incoming(), purchaseId)
+        && incoming().purchaseId == existing().purchaseId
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /planCreditSchedules/{scheduleId} {
+      allow get: if isValidId(scheduleId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(scheduleId) && isVerifiedUser() && (
+        isAdmin() ||
+        (incoming().userId == request.auth.uid
+          && incoming().status == 'pending'
+          && existsAfter(/databases/$(database)/documents/planPurchases/$(incoming().purchaseId)))
+      );
+      allow update: if isValidId(scheduleId) && isAdmin();
+      allow delete: if false;
+    }
+
+    match /paymentConfigurations/{configId} {
+      allow get: if isValidId(configId) && isSignedIn() && (existing().enabled == true || isAdmin());
+      allow list: if isSignedIn() && (resource.data.enabled == true || isAdmin());
+      allow create: if isValidId(configId) && isAdmin()
+        && isValidPaymentConfiguration(incoming(), configId)
+        && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(configId) && isAdmin()
+        && isValidPaymentConfiguration(incoming(), configId)
+        && incoming().configId == existing().configId
+        && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(configId) && isAdmin();
+    }
+
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (existing().active == true || isAdmin());
+      allow list: if resource.data.active == true || isAdmin();
+      allow create: if isValidId(productId) && isAdmin()
+        && isValidProduct(incoming(), productId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(productId) && isAdmin()
+        && isValidProduct(incoming(), productId)
+        && incoming().productId == existing().productId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(productId) && isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(orderId) && isVerifiedUser()
+        && isValidOrder(incoming(), orderId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'completed'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/products/$(incoming().productId))
+        && get(/databases/$(database)/documents/products/$(incoming().productId)).data.active == true
+        && incoming().coinAmount == get(/databases/$(database)/documents/products/$(incoming().productId)).data.coinPrice * incoming().quantity;
+      allow update: if isValidId(orderId) && isAdmin()
+        && isValidOrder(incoming(), orderId)
+        && incoming().orderId == existing().orderId
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(paymentId) && isVerifiedUser()
+        && isValidSandboxPayment(incoming(), paymentId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'initiated'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(paymentId) && isVerifiedUser()
+        && isValidSandboxPayment(incoming(), paymentId)
+        && incoming().paymentId == existing().paymentId
+        && incoming().userId == existing().userId
+        && incoming().idempotencyKey == existing().idempotencyKey
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (existing().userId == request.auth.uid
+            && existing().status == 'initiated'
+            && incoming().status in ['webhook_verified', 'failed', 'expired']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'webhookEventId', 'serverSignature', 'failureReason', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    match /paymentRequests/{paymentId} {
+      allow get: if isValidId(paymentId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(paymentId) && isVerifiedUser()
+        && isValidSandboxPayment(incoming(), paymentId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'initiated'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(paymentId) && isVerifiedUser()
+        && isValidSandboxPayment(incoming(), paymentId)
+        && incoming().paymentId == existing().paymentId
+        && incoming().userId == existing().userId
+        && incoming().idempotencyKey == existing().idempotencyKey
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (existing().userId == request.auth.uid
+            && existing().status == 'initiated'
+            && incoming().status in ['webhook_verified', 'failed', 'expired']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'webhookEventId', 'serverSignature', 'failureReason', 'updatedAt']))
+        );
+      allow delete: if false;
+    }
+
+    match /coin_requests/{requestId} {
+      allow get: if isValidId(requestId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(requestId) && isVerifiedUser()
+        && isValidCoinRequest(incoming(), requestId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().adminNote == ''
+        && incoming().reviewedBy == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/payments/$(incoming().paymentId));
+      allow update: if isValidId(requestId) && isAdmin()
+        && isValidCoinRequest(incoming(), requestId)
+        && incoming().requestId == existing().requestId
+        && incoming().userId == existing().userId
+        && incoming().paymentId == existing().paymentId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'reviewedBy', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(withdrawalId) && isVerifiedUser()
+        && isValidWithdrawal(incoming(), withdrawalId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().adminNote == ''
+        && incoming().reviewedBy == ''
+        && (!('providerConfirmed' in incoming()) || incoming().providerConfirmed == false)
+        && (!('debitedFromWallet' in incoming()) || incoming().debitedFromWallet == false)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(withdrawalId) && isAdmin()
+        && isValidWithdrawal(incoming(), withdrawalId)
+        && incoming().withdrawalId == existing().withdrawalId
+        && incoming().userId == existing().userId
+        && incoming().amountCoins == existing().amountCoins
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (incoming().status != 'successful' || (incoming().providerConfirmed == true && incoming().payoutReferenceNumber is string && incoming().payoutReferenceNumber.size() >= 4))
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'reviewedBy', 'payoutReferenceNumber', 'providerConfirmed', 'debitedFromWallet', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /withdrawalRequests/{withdrawalId} {
+      allow get: if isValidId(withdrawalId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(withdrawalId) && isVerifiedUser()
+        && isValidWithdrawal(incoming(), withdrawalId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().adminNote == ''
+        && incoming().reviewedBy == ''
+        && (!('providerConfirmed' in incoming()) || incoming().providerConfirmed == false)
+        && (!('debitedFromWallet' in incoming()) || incoming().debitedFromWallet == false)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(withdrawalId) && isAdmin()
+        && isValidWithdrawal(incoming(), withdrawalId)
+        && incoming().withdrawalId == existing().withdrawalId
+        && incoming().userId == existing().userId
+        && incoming().amountCoins == existing().amountCoins
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (incoming().status != 'successful' || (incoming().providerConfirmed == true && incoming().payoutReferenceNumber is string && incoming().payoutReferenceNumber.size() >= 4))
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'adminNote', 'reviewedBy', 'payoutReferenceNumber', 'providerConfirmed', 'debitedFromWallet', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /referrals/{referralId} {
+      allow get: if isValidId(referralId) && isSignedIn() && (existing().referrerId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.referrerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(referralId) && isAdmin()
+        && isValidReferral(incoming(), referralId)
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(referralId) && isAdmin()
+        && isValidReferral(incoming(), referralId)
+        && incoming().referralId == existing().referralId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if false;
+    }
+
+    match /support_tickets/{ticketId} {
+      allow get: if isValidId(ticketId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(ticketId) && isVerifiedUser()
+        && isValidSupportTicket(incoming(), ticketId)
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(ticketId) && isVerifiedUser()
+        && isValidSupportTicket(incoming(), ticketId)
+        && incoming().ticketId == existing().ticketId
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (existing().userId == request.auth.uid
+            && existing().status != 'closed'
+            && incoming().status in ['open', 'closed']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+        );
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow get: if isValidId(ticketId) && isValidId(messageId) && isSignedIn() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/support_tickets/$(ticketId)).data.userId == request.auth.uid
+        );
+        allow list: if isValidId(ticketId) && isSignedIn() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/support_tickets/$(ticketId)).data.userId == request.auth.uid
+        );
+        allow create: if isValidId(ticketId) && isValidId(messageId) && isVerifiedUser()
+          && isValidTicketMessage(incoming(), ticketId, messageId)
+          && incoming().senderId == request.auth.uid
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/support_tickets/$(ticketId))
+          && (
+            (isAdmin() && incoming().senderRole == 'admin') ||
+            (get(/databases/$(database)/documents/support_tickets/$(ticketId)).data.userId == request.auth.uid && incoming().senderRole == 'user')
+          );
+        allow update, delete: if false;
+      }
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId) && isSignedIn() && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isValidId(notificationId) && isVerifiedUser()
+        && isValidNotification(incoming(), notificationId)
+        && incoming().createdAt == request.time
+        && (isAdmin() || incoming().userId == request.auth.uid);
+      allow update: if isValidId(notificationId) && isVerifiedUser()
+        && isValidNotification(incoming(), notificationId)
+        && incoming().notificationId == existing().notificationId
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && (isAdmin() || (existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['read'])));
+      allow delete: if isValidId(notificationId) && isAdmin();
+    }
+
+    match /adminSettings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create, update: if isValidId(settingId) && isAdmin()
+        && isValidAdminSettings(incoming(), settingId)
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /aiFeatureSettings/{settingId} {
+      allow get: if isValidId(settingId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(settingId) && isAdmin()
+        && isValidAiFeatureSettings(incoming(), settingId)
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /gateway_config/{configId} {
+      allow get: if isValidId(configId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create, update: if isValidId(configId) && isAdmin()
+        && isValidGatewayConfig(incoming(), configId)
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /security_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(logId) && isVerifiedUser()
+        && isValidSecurityLog(incoming(), logId)
+        && (isAdmin() || incoming().actorUid == request.auth.uid)
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}
